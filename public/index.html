@@ -307,9 +307,24 @@
         return null;
       }
 
+      async function requestJson(url, options = {}) {
+        const response = await fetch(url, options);
+        let data = null;
+        try {
+          data = await response.json();
+        } catch (error) {
+          data = null;
+        }
+        return { response, data };
+      }
+
       async function loadUsers() {
-        const res = await fetch('/api/users');
-        const users = await res.json();
+        const { response, data } = await requestJson('/api/users');
+        if (!response.ok || !Array.isArray(data)) {
+          throw new Error('Failed to load users.');
+        }
+
+        const users = data;
         usersCache = users;
 
         if (users.length === 0) {
@@ -378,19 +393,22 @@
         }
 
         clearMessage();
-        const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
-        const data = await res.json();
+        try {
+          const { response, data } = await requestJson(`/api/users/${id}`, { method: 'DELETE' });
 
-        if (!res.ok) {
-          setMessage(data.message || 'Failed to delete user.', true);
-          return;
-        }
+          if (!response.ok) {
+            setMessage((data && data.message) || 'Failed to delete user.', true);
+            return;
+          }
 
-        setMessage('User deleted successfully.');
-        if (editingId === id) {
-          resetForm();
+          setMessage('User deleted successfully.');
+          if (editingId === id) {
+            resetForm();
+          }
+          await loadUsers();
+        } catch (error) {
+          setMessage('Failed to delete user.', true);
         }
-        await loadUsers();
       };
 
       cancelBtn.addEventListener('click', () => {
@@ -419,21 +437,24 @@
         const endpoint = editingId === null ? '/api/users' : `/api/users/${editingId}`;
         const method = editingId === null ? 'POST' : 'PUT';
 
-        const res = await fetch(endpoint, {
-          method,
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
+        try {
+          const { response, data } = await requestJson(endpoint, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
 
-        const data = await res.json();
-        if (!res.ok) {
-          setMessage(data.message || 'Operation failed.', true);
-          return;
+          if (!response.ok) {
+            setMessage((data && data.message) || 'Operation failed.', true);
+            return;
+          }
+
+          setMessage(editingId === null ? 'User added successfully.' : 'User updated successfully.');
+          resetForm();
+          await loadUsers();
+        } catch (error) {
+          setMessage('Request failed. Please try again.', true);
         }
-
-        setMessage(editingId === null ? 'User added successfully.' : 'User updated successfully.');
-        resetForm();
-        await loadUsers();
       });
 
       loadUsers().catch(() => {
