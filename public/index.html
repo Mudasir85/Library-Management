@@ -191,7 +191,7 @@
           <form id="user-form">
             <div>
               <label for="full_name">Full Name</label>
-              <input id="full_name" name="full_name" maxlength="50" required />
+              <input id="full_name" name="full_name" minlength="2" maxlength="50" required />
             </div>
 
             <div>
@@ -201,7 +201,15 @@
 
             <div>
               <label for="phone">Phone (10 digits)</label>
-              <input id="phone" name="phone" inputmode="numeric" maxlength="10" required />
+              <input
+                id="phone"
+                name="phone"
+                inputmode="numeric"
+                maxlength="10"
+                pattern="\d{10}"
+                title="Enter exactly 10 digits"
+                required
+              />
             </div>
 
             <div>

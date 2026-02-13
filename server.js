@@ -9,16 +9,17 @@ const DB_PATH = path.join(__dirname, 'users.db');
 const db = new sqlite3.Database(DB_PATH);
 
 const ALLOWED_ROLES = ['Admin', 'User', 'Guest'];
+const ALLOWED_ROLE_SET = new Set(ALLOWED_ROLES);
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_REGEX = /^\d{10}$/;
 const CREATE_USERS_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    full_name TEXT NOT NULL,
+    full_name TEXT NOT NULL CHECK(length(full_name) BETWEEN 2 AND 50),
     email TEXT UNIQUE NOT NULL,
-    phone TEXT NOT NULL,
-    role TEXT NOT NULL,
-    password TEXT NOT NULL
+    phone TEXT NOT NULL CHECK(length(phone) = 10),
+    role TEXT NOT NULL CHECK(role IN ('Admin', 'User', 'Guest')),
+    password TEXT NOT NULL CHECK(length(password) >= 8)
   )
 `;
 
@@ -82,7 +83,7 @@ function validateUserInput(input, isEdit = false) {
     errors.push('Phone must be exactly 10 digits.');
   }
 
-  if (!ALLOWED_ROLES.includes(role)) {
+  if (!ALLOWED_ROLE_SET.has(role)) {
     errors.push('Role must be Admin, User, or Guest.');
   }
 

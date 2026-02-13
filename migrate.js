@@ -8,11 +8,11 @@ db.serialize(() => {
   db.run(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      full_name TEXT NOT NULL,
+      full_name TEXT NOT NULL CHECK(length(full_name) BETWEEN 2 AND 50),
       email TEXT UNIQUE NOT NULL,
-      phone TEXT NOT NULL,
-      role TEXT NOT NULL,
-      password TEXT NOT NULL
+      phone TEXT NOT NULL CHECK(length(phone) = 10),
+      role TEXT NOT NULL CHECK(role IN ('Admin', 'User', 'Guest')),
+      password TEXT NOT NULL CHECK(length(password) >= 8)
     )
   `, (err) => {
     if (err) {
