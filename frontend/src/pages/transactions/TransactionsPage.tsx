@@ -16,7 +16,6 @@ import { transactionService } from '@/services/transaction.service';
 import { Transaction, TransactionStatus } from '@/types';
 import DataTable, { Column } from '@/components/common/DataTable';
 import Pagination from '@/components/common/Pagination';
-import Modal from '@/components/common/Modal';
 import StatusBadge from '@/components/common/StatusBadge';
 import SearchInput from '@/components/common/SearchInput';
 import StatsCard from '@/components/common/StatsCard';
@@ -39,8 +38,6 @@ export default function TransactionsPage() {
   const [showFilters, setShowFilters] = useState(false);
 
   const [overdueCount, setOverdueCount] = useState(0);
-  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
-  const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [renewingId, setRenewingId] = useState<string | null>(null);
 
   const fetchTransactions = useCallback(async () => {
@@ -82,16 +79,6 @@ export default function TransactionsPage() {
   useEffect(() => {
     fetchOverdueCount();
   }, [fetchOverdueCount]);
-
-  const handleViewDetails = async (transaction: Transaction) => {
-    try {
-      const response = await transactionService.getById(transaction.id);
-      setSelectedTransaction(response.data);
-      setDetailModalOpen(true);
-    } catch {
-      toast.error('Failed to load transaction details');
-    }
-  };
 
   const handleRenew = async (transactionId: string) => {
     setRenewingId(transactionId);
@@ -169,7 +156,7 @@ export default function TransactionsPage() {
           <button
             onClick={(e) => {
               e.stopPropagation();
-              handleViewDetails(row);
+              navigate(`/transactions/${row.id}`);
             }}
             className="rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 hover:text-primary-600 transition-colors"
             title="View details"
@@ -416,125 +403,6 @@ export default function TransactionsPage() {
           </div>
         )}
       </div>
-
-      {/* Detail Modal */}
-      <Modal
-        isOpen={detailModalOpen}
-        onClose={() => {
-          setDetailModalOpen(false);
-          setSelectedTransaction(null);
-        }}
-        title="Transaction Details"
-        size="lg"
-      >
-        {selectedTransaction && (
-          <div className="space-y-6">
-            {/* Book Info */}
-            <div>
-              <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-gray-400">
-                Book Information
-              </h3>
-              <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
-                <p className="text-lg font-semibold text-gray-900">
-                  {selectedTransaction.book?.title ?? 'Unknown'}
-                </p>
-                <p className="text-sm text-gray-600">
-                  by {selectedTransaction.book?.author ?? 'Unknown'}
-                </p>
-                {selectedTransaction.book?.isbn && (
-                  <p className="mt-1 text-xs text-gray-400">
-                    ISBN: {selectedTransaction.book.isbn}
-                  </p>
-                )}
-              </div>
-            </div>
-
-            {/* Member Info */}
-            <div>
-              <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-gray-400">
-                Member Information
-              </h3>
-              <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
-                <p className="font-medium text-gray-900">
-                  {selectedTransaction.member?.fullName ?? 'Unknown'}
-                </p>
-                <p className="text-sm text-gray-600">
-                  {selectedTransaction.member?.email}
-                </p>
-                {selectedTransaction.member?.memberType && (
-                  <div className="mt-1">
-                    <StatusBadge status={selectedTransaction.member.memberType} />
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Transaction Details Grid */}
-            <div>
-              <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-gray-400">
-                Transaction Details
-              </h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="rounded-lg border border-gray-100 p-3">
-                  <p className="text-xs text-gray-400">Issue Date</p>
-                  <p className="font-medium text-gray-900">
-                    {format(new Date(selectedTransaction.issueDate), 'MMMM dd, yyyy')}
-                  </p>
-                </div>
-                <div className="rounded-lg border border-gray-100 p-3">
-                  <p className="text-xs text-gray-400">Due Date</p>
-                  <p className="font-medium text-gray-900">
-                    {format(new Date(selectedTransaction.dueDate), 'MMMM dd, yyyy')}
-                  </p>
-                </div>
-                <div className="rounded-lg border border-gray-100 p-3">
-                  <p className="text-xs text-gray-400">Return Date</p>
-                  <p className="font-medium text-gray-900">
-                    {selectedTransaction.returnDate
-                      ? format(new Date(selectedTransaction.returnDate), 'MMMM dd, yyyy')
-                      : 'Not returned'}
-                  </p>
-                </div>
-                <div className="rounded-lg border border-gray-100 p-3">
-                  <p className="text-xs text-gray-400">Status</p>
-                  <div className="mt-0.5">
-                    <StatusBadge status={selectedTransaction.status} size="md" />
-                  </div>
-                </div>
-                <div className="rounded-lg border border-gray-100 p-3">
-                  <p className="text-xs text-gray-400">Renewals</p>
-                  <p className="font-medium text-gray-900">
-                    {selectedTransaction.renewalCount}
-                  </p>
-                </div>
-                <div className="rounded-lg border border-gray-100 p-3">
-                  <p className="text-xs text-gray-400">Fine</p>
-                  {selectedTransaction.fineAmount > 0 ? (
-                    <p className="font-medium text-red-600">
-                      ${selectedTransaction.fineAmount.toFixed(2)}{' '}
-                      {selectedTransaction.finePaid && (
-                        <span className="text-xs text-green-600">(Paid)</span>
-                      )}
-                    </p>
-                  ) : (
-                    <p className="font-medium text-gray-400">None</p>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Issued By */}
-            {selectedTransaction.issuedBy && (
-              <div className="text-xs text-gray-400">
-                Issued by: {selectedTransaction.issuedBy.fullName}
-                {selectedTransaction.returnedTo && (
-                  <> | Returned to: {selectedTransaction.returnedTo.fullName}</>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-      </Modal>
     </div>
   );
 }

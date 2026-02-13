@@ -22,6 +22,7 @@ const MemberFormPage = React.lazy(() => import('@/pages/members/MemberFormPage')
 
 // Transactions
 const TransactionsPage = React.lazy(() => import('@/pages/transactions/TransactionsPage'));
+const TransactionDetailPage = React.lazy(() => import('@/pages/transactions/TransactionDetailPage'));
 const IssueBookPage = React.lazy(() => import('@/pages/transactions/IssueBookPage'));
 const ReturnBookPage = React.lazy(() => import('@/pages/transactions/ReturnBookPage'));
 
@@ -62,6 +63,7 @@ export default function App() {
 
           {/* Transactions */}
           <Route path="transactions" element={<TransactionsPage />} />
+          <Route path="transactions/:id" element={<TransactionDetailPage />} />
           <Route path="transactions/issue" element={<IssueBookPage />} />
           <Route path="transactions/return" element={<ReturnBookPage />} />
 
