@@ -110,6 +110,16 @@ app.use((error, req, res, next) => {
 });
 app.use(express.static(path.join(__dirname, 'public')));
 
+app.get('/user-details/:id', (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).send('Invalid user id.');
+    return;
+  }
+
+  res.sendFile(path.join(__dirname, 'public', 'user-details.html'));
+});
+
 app.get(['/api/users', '/users'], async (req, res) => {
   try {
     const users = await all(

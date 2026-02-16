@@ -165,9 +165,18 @@
           .join('');
       }
 
-      async function loadUserDetails() {
+      function getUserIdFromUrl() {
+        const pathMatch = window.location.pathname.match(/^\/user-details\/(\d+)$/);
+        if (pathMatch) {
+          return pathMatch[1];
+        }
+
         const params = new URLSearchParams(window.location.search);
-        const id = params.get('id');
+        return params.get('id');
+      }
+
+      async function loadUserDetails() {
+        const id = getUserIdFromUrl();
 
         if (!id || !/^\d+$/.test(id)) {
           message.textContent = 'Invalid user id.';
