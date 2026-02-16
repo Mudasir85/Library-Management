@@ -26,6 +26,21 @@
 
     .header h1 { font-size: 22px; font-weight: 600; }
 
+    .nav-links { display: flex; gap: 16px; }
+
+    .nav-links a {
+      color: #fff;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      padding: 6px 14px;
+      border-radius: 6px;
+      transition: background 0.2s;
+    }
+
+    .nav-links a:hover { background: rgba(255,255,255,0.15); }
+    .nav-links a.active { background: rgba(255,255,255,0.25); }
+
     .container {
       max-width: 1100px;
       margin: 24px auto;
@@ -209,6 +224,10 @@
 
   <div class="header">
     <h1>Library Management System</h1>
+    <div class="nav-links">
+      <a href="index.html" class="active">Users</a>
+      <a href="contact.html">Contact Us</a>
+    </div>
   </div>
 
   <div class="container">

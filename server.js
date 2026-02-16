@@ -30,6 +30,18 @@ db.run(`
   )
 `);
 
+// Create contact_messages table
+db.run(`
+  CREATE TABLE IF NOT EXISTS contact_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    message TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
 // Validation helpers
 function validateUser(data, isUpdate = false) {
   const errors = [];
@@ -149,6 +161,66 @@ app.delete('/api/users/:id', (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
     res.json({ message: 'User deleted successfully' });
+  });
+});
+
+// GET /api/contacts - List all contact messages
+app.get('/api/contacts', (req, res) => {
+  db.all('SELECT * FROM contact_messages ORDER BY id DESC', [], (err, rows) => {
+    if (err) {
+      return res.status(500).json({ error: 'Failed to fetch messages' });
+    }
+    res.json(rows);
+  });
+});
+
+// POST /api/contacts - Submit a contact message
+app.post('/api/contacts', (req, res) => {
+  const { name, email, subject, message } = req.body;
+  const errors = [];
+
+  if (!name || name.trim().length < 2 || name.trim().length > 50) {
+    errors.push('Name must be between 2 and 50 characters');
+  }
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    errors.push('A valid email is required');
+  }
+  const validSubjects = ['General', 'Support', 'Feedback', 'Other'];
+  if (!subject || !validSubjects.includes(subject)) {
+    errors.push('Subject must be General, Support, Feedback, or Other');
+  }
+  if (!message || message.trim().length < 10 || message.trim().length > 1000) {
+    errors.push('Message must be between 10 and 1000 characters');
+  }
+
+  if (errors.length > 0) {
+    return res.status(400).json({ error: errors.join(', ') });
+  }
+
+  db.run(
+    'INSERT INTO contact_messages (name, email, subject, message) VALUES (?, ?, ?, ?)',
+    [name.trim(), email.trim().toLowerCase(), subject, message.trim()],
+    function (err) {
+      if (err) {
+        return res.status(500).json({ error: 'Failed to save message' });
+      }
+      res.status(201).json({ id: this.lastID, name, email, subject, message });
+    }
+  );
+});
+
+// DELETE /api/contacts/:id - Delete a contact message
+app.delete('/api/contacts/:id', (req, res) => {
+  const { id } = req.params;
+
+  db.run('DELETE FROM contact_messages WHERE id = ?', [id], function (err) {
+    if (err) {
+      return res.status(500).json({ error: 'Failed to delete message' });
+    }
+    if (this.changes === 0) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+    res.json({ message: 'Message deleted successfully' });
   });
 });
 
