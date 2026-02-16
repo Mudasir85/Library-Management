@@ -41,6 +41,27 @@
     .nav-links a:hover { background: rgba(255,255,255,0.15); }
     .nav-links a.active { background: rgba(255,255,255,0.25); }
 
+    .nav-divider {
+      width: 1px;
+      height: 20px;
+      background: rgba(255,255,255,0.3);
+    }
+
+    .btn-logout {
+      color: #fff;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+      text-decoration: none;
+    }
+
+    .btn-logout:hover { background: rgba(255,255,255,0.25); }
+
     .container {
       max-width: 1100px;
       margin: 24px auto;
@@ -292,10 +313,12 @@
 <body>
 
   <div class="header">
-    <h1>Library Management System</h1>
+    <h1>Library Management</h1>
     <div class="nav-links">
       <a href="index.html">Users</a>
       <a href="contact.html" class="active">Contact Us</a>
+      <div class="nav-divider"></div>
+      <button class="btn-logout" onclick="logout()">Logout</button>
     </div>
   </div>
 
@@ -406,6 +429,18 @@
   </div>
 
 <script>
+  // Auth check - redirect to login if not authenticated
+  if (sessionStorage.getItem('loggedIn') !== 'true') {
+    window.location.href = 'login.html';
+  }
+
+  // Logout function
+  function logout() {
+    sessionStorage.removeItem('loggedIn');
+    sessionStorage.removeItem('loggedInUser');
+    window.location.href = 'login.html';
+  }
+
   const API = '/api/contacts';
 
   function showAlert(message, type) {

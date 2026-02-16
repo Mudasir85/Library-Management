@@ -9,6 +9,11 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Redirect root to login page
+app.get('/', (req, res) => {
+  res.redirect('/login.html');
+});
+
 // Database setup
 const db = new sqlite3.Database('./database.sqlite', (err) => {
   if (err) {
@@ -41,6 +46,25 @@ db.run(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `);
+
+// Default admin credentials
+const ADMIN_USERNAME = 'admin';
+const ADMIN_PASSWORD = 'admin123';
+
+// POST /api/login - Authenticate user
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body;
+
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' });
+  }
+
+  if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+    return res.json({ message: 'Login successful', username });
+  }
+
+  return res.status(401).json({ error: 'Invalid username or password' });
+});
 
 // Validation helpers
 function validateUser(data, isUpdate = false) {
