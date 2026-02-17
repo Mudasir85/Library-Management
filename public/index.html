@@ -246,8 +246,8 @@
   <div class="header">
     <h1>Library Management</h1>
     <div class="nav-links">
-      <a href="index.html" class="active">Users</a>
-      <a href="contact.html">Contact Us</a>
+      <a href="/mohit/index.html" class="active">Users</a>
+      <a href="/mohit/contact.html">Contact Us</a>
       <div class="nav-divider"></div>
       <button class="btn-logout" onclick="logout()">Logout</button>
     </div>
@@ -320,19 +320,25 @@
   </div>
 
 <script>
-  // Auth check - redirect to login if not authenticated
-  if (sessionStorage.getItem('loggedIn') !== 'true') {
-    window.location.href = 'login.html';
+  // Logout function - calls server to destroy session
+  async function logout() {
+    try {
+      await fetch('/mohit/api/logout', { method: 'POST' });
+    } catch {}
+    window.location.href = '/mohit/login.html';
   }
 
-  // Logout function
-  function logout() {
-    sessionStorage.removeItem('loggedIn');
-    sessionStorage.removeItem('loggedInUser');
-    window.location.href = 'login.html';
+  // Handle 401 responses (session expired) - redirect to login
+  async function authFetch(url, options) {
+    const res = await fetch(url, options);
+    if (res.status === 401) {
+      window.location.href = '/mohit/login.html';
+      throw new Error('Unauthorized');
+    }
+    return res;
   }
 
-  const API = '/api/users';
+  const API = '/mohit/api/users';
 
   // Show alert message
   function showAlert(message, type) {
@@ -346,7 +352,7 @@
   // Load all users
   async function loadUsers() {
     try {
-      const res = await fetch(API);
+      const res = await authFetch(API);
       const users = await res.json();
       const tbody = document.getElementById('usersTableBody');
 
@@ -421,7 +427,7 @@
       const url = isEdit ? `${API}/${id}` : API;
       const method = isEdit ? 'PUT' : 'POST';
 
-      const res = await fetch(url, {
+      const res = await authFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -463,7 +469,7 @@
     if (!confirm(`Are you sure you want to delete "${name}"?`)) return;
 
     try {
-      const res = await fetch(`${API}/${id}`, { method: 'DELETE' });
+      const res = await authFetch(`${API}/${id}`, { method: 'DELETE' });
       const result = await res.json();
 
       if (!res.ok) {
