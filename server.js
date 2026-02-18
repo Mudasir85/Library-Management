@@ -148,7 +148,35 @@ db.run(`
     author_name TEXT NOT NULL,
     publisher_name TEXT NOT NULL,
     book_image TEXT,
+    total_copies INTEGER NOT NULL DEFAULT 1,
+    available_copies INTEGER NOT NULL DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
+// Add total_copies and available_copies columns if they don't exist (for existing databases)
+db.all("PRAGMA table_info(books)", [], (err, columns) => {
+  if (err) return;
+  const colNames = columns.map(c => c.name);
+  if (!colNames.includes('total_copies')) {
+    db.run("ALTER TABLE books ADD COLUMN total_copies INTEGER NOT NULL DEFAULT 1");
+  }
+  if (!colNames.includes('available_copies')) {
+    db.run("ALTER TABLE books ADD COLUMN available_copies INTEGER NOT NULL DEFAULT 1");
+  }
+});
+
+// Create issued_books table for tracking book issues and returns
+db.run(`
+  CREATE TABLE IF NOT EXISTS issued_books (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    issue_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    return_date DATETIME,
+    status TEXT NOT NULL DEFAULT 'Issued',
+    FOREIGN KEY (book_id) REFERENCES books(id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
   )
 `);
 
@@ -192,7 +220,15 @@ app.get('/api/dashboard/stats', (req, res) => {
     db.get('SELECT COUNT(*) as count FROM books', [], (err2, row2) => {
       if (err2) return res.status(500).json({ error: 'Failed to fetch stats' });
       stats.totalBooks = row2.count;
-      res.json(stats);
+
+      db.get("SELECT COUNT(*) as count FROM issued_books WHERE status = 'Issued'", [], (err3, row3) => {
+        if (err3) {
+          stats.totalIssued = 0;
+        } else {
+          stats.totalIssued = row3.count;
+        }
+        res.json(stats);
+      });
     });
   });
 });
@@ -319,6 +355,17 @@ app.delete('/api/users/:id', (req, res) => {
 
 // --- BOOKS API ---
 
+// GET /api/books/available - Get books with available_copies > 0 (for issue dropdown)
+// NOTE: Must be defined before /api/books/:id to avoid route conflict
+app.get('/api/books/available', (req, res) => {
+  db.all('SELECT id, book_name, author_name, available_copies FROM books WHERE available_copies > 0 ORDER BY book_name ASC', [], (err, rows) => {
+    if (err) {
+      return res.status(500).json({ error: 'Failed to fetch available books' });
+    }
+    res.json(rows);
+  });
+});
+
 // GET /api/books - List all books
 app.get('/api/books', (req, res) => {
   db.all('SELECT * FROM books ORDER BY id DESC', [], (err, rows) => {
@@ -331,7 +378,7 @@ app.get('/api/books', (req, res) => {
 
 // POST /api/books - Add a book
 app.post('/api/books', upload.single('book_image'), (req, res) => {
-  const { book_name, class: bookClass, author_name, publisher_name } = req.body;
+  const { book_name, class: bookClass, author_name, publisher_name, total_copies } = req.body;
   const errors = [];
 
   if (!book_name || book_name.trim().length < 2 || book_name.trim().length > 100) {
@@ -345,6 +392,11 @@ app.post('/api/books', upload.single('book_image'), (req, res) => {
   }
   if (!publisher_name || publisher_name.trim().length < 2 || publisher_name.trim().length > 100) {
     errors.push('Publisher Name must be between 2 and 100 characters');
+  }
+
+  const copies = parseInt(total_copies) || 1;
+  if (copies < 1 || copies > 9999) {
+    errors.push('Total Copies must be between 1 and 9999');
   }
 
   if (errors.length > 0) {
@@ -356,8 +408,8 @@ app.post('/api/books', upload.single('book_image'), (req, res) => {
   const bookImage = req.file ? '/uploads/' + req.file.filename : null;
 
   db.run(
-    'INSERT INTO books (book_name, class, author_name, publisher_name, book_image) VALUES (?, ?, ?, ?, ?)',
-    [book_name.trim(), bookClass.trim(), author_name.trim(), publisher_name.trim(), bookImage],
+    'INSERT INTO books (book_name, class, author_name, publisher_name, book_image, total_copies, available_copies) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [book_name.trim(), bookClass.trim(), author_name.trim(), publisher_name.trim(), bookImage, copies, copies],
     function (err) {
       if (err) {
         if (req.file) fs.unlinkSync(req.file.path);
@@ -369,7 +421,9 @@ app.post('/api/books', upload.single('book_image'), (req, res) => {
         class: bookClass.trim(),
         author_name: author_name.trim(),
         publisher_name: publisher_name.trim(),
-        book_image: bookImage
+        book_image: bookImage,
+        total_copies: copies,
+        available_copies: copies
       });
     }
   );
@@ -378,7 +432,7 @@ app.post('/api/books', upload.single('book_image'), (req, res) => {
 // PUT /api/books/:id - Edit a book
 app.put('/api/books/:id', upload.single('book_image'), (req, res) => {
   const { id } = req.params;
-  const { book_name, class: bookClass, author_name, publisher_name } = req.body;
+  const { book_name, class: bookClass, author_name, publisher_name, total_copies } = req.body;
   const errors = [];
 
   if (!book_name || book_name.trim().length < 2 || book_name.trim().length > 100) {
@@ -392,6 +446,11 @@ app.put('/api/books/:id', upload.single('book_image'), (req, res) => {
   }
   if (!publisher_name || publisher_name.trim().length < 2 || publisher_name.trim().length > 100) {
     errors.push('Publisher Name must be between 2 and 100 characters');
+  }
+
+  const newTotalCopies = parseInt(total_copies);
+  if (total_copies !== undefined && total_copies !== '' && (isNaN(newTotalCopies) || newTotalCopies < 1 || newTotalCopies > 9999)) {
+    errors.push('Total Copies must be between 1 and 9999');
   }
 
   if (errors.length > 0) {
@@ -419,9 +478,18 @@ app.put('/api/books/:id', upload.single('book_image'), (req, res) => {
       bookImage = '/uploads/' + req.file.filename;
     }
 
+    // Calculate new available_copies based on total_copies change
+    let updatedTotalCopies = row.total_copies || 1;
+    let updatedAvailableCopies = row.available_copies || 0;
+    if (!isNaN(newTotalCopies) && newTotalCopies >= 1) {
+      const issuedCount = updatedTotalCopies - updatedAvailableCopies;
+      updatedTotalCopies = newTotalCopies;
+      updatedAvailableCopies = Math.max(0, newTotalCopies - issuedCount);
+    }
+
     db.run(
-      'UPDATE books SET book_name = ?, class = ?, author_name = ?, publisher_name = ?, book_image = ? WHERE id = ?',
-      [book_name.trim(), bookClass.trim(), author_name.trim(), publisher_name.trim(), bookImage, id],
+      'UPDATE books SET book_name = ?, class = ?, author_name = ?, publisher_name = ?, book_image = ?, total_copies = ?, available_copies = ? WHERE id = ?',
+      [book_name.trim(), bookClass.trim(), author_name.trim(), publisher_name.trim(), bookImage, updatedTotalCopies, updatedAvailableCopies, id],
       function (err) {
         if (err) {
           return res.status(500).json({ error: 'Failed to update book' });
@@ -436,19 +504,117 @@ app.put('/api/books/:id', upload.single('book_image'), (req, res) => {
 app.delete('/api/books/:id', (req, res) => {
   const { id } = req.params;
 
-  db.get('SELECT book_image FROM books WHERE id = ?', [id], (err, row) => {
+  // Check if book has any active issues
+  db.get("SELECT COUNT(*) as count FROM issued_books WHERE book_id = ? AND status = 'Issued'", [id], (err, issueRow) => {
     if (err) return res.status(500).json({ error: 'Database error' });
-    if (!row) return res.status(404).json({ error: 'Book not found' });
-
-    // Delete associated image file
-    if (row.book_image) {
-      const imgPath = path.join(__dirname, 'public', row.book_image);
-      if (fs.existsSync(imgPath)) fs.unlinkSync(imgPath);
+    if (issueRow && issueRow.count > 0) {
+      return res.status(400).json({ error: 'Cannot delete book. It has ' + issueRow.count + ' active issue(s). Return all copies first.' });
     }
 
-    db.run('DELETE FROM books WHERE id = ?', [id], function (err) {
-      if (err) return res.status(500).json({ error: 'Failed to delete book' });
-      res.json({ message: 'Book deleted successfully' });
+    db.get('SELECT book_image FROM books WHERE id = ?', [id], (err, row) => {
+      if (err) return res.status(500).json({ error: 'Database error' });
+      if (!row) return res.status(404).json({ error: 'Book not found' });
+
+      // Delete associated image file
+      if (row.book_image) {
+        const imgPath = path.join(__dirname, 'public', row.book_image);
+        if (fs.existsSync(imgPath)) fs.unlinkSync(imgPath);
+      }
+
+      db.run('DELETE FROM books WHERE id = ?', [id], function (err) {
+        if (err) return res.status(500).json({ error: 'Failed to delete book' });
+        res.json({ message: 'Book deleted successfully' });
+      });
+    });
+  });
+});
+
+// --- ISSUE BOOKS API ---
+
+// GET /api/issued-books - List all issued books
+app.get('/api/issued-books', (req, res) => {
+  db.all(`
+    SELECT ib.id, ib.book_id, ib.user_id, ib.issue_date, ib.return_date, ib.status,
+           b.book_name, b.author_name,
+           u.full_name as user_name, u.email as user_email
+    FROM issued_books ib
+    JOIN books b ON ib.book_id = b.id
+    JOIN users u ON ib.user_id = u.id
+    ORDER BY ib.id DESC
+  `, [], (err, rows) => {
+    if (err) {
+      return res.status(500).json({ error: 'Failed to fetch issued books' });
+    }
+    res.json(rows);
+  });
+});
+
+// POST /api/issued-books - Issue a book
+app.post('/api/issued-books', (req, res) => {
+  const { book_id, user_id } = req.body;
+  const errors = [];
+
+  if (!book_id) errors.push('Book is required');
+  if (!user_id) errors.push('User is required');
+
+  if (errors.length > 0) {
+    return res.status(400).json({ error: errors.join(', ') });
+  }
+
+  // Check if book has available copies
+  db.get('SELECT * FROM books WHERE id = ?', [book_id], (err, book) => {
+    if (err) return res.status(500).json({ error: 'Database error' });
+    if (!book) return res.status(404).json({ error: 'Book not found' });
+    if (book.available_copies <= 0) {
+      return res.status(400).json({ error: 'No available copies of this book' });
+    }
+
+    // Check if user exists
+    db.get('SELECT id FROM users WHERE id = ?', [user_id], (err, user) => {
+      if (err) return res.status(500).json({ error: 'Database error' });
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      // Check if this user already has this book issued (not returned)
+      db.get('SELECT id FROM issued_books WHERE book_id = ? AND user_id = ? AND status = ?', [book_id, user_id, 'Issued'], (err, existing) => {
+        if (err) return res.status(500).json({ error: 'Database error' });
+        if (existing) {
+          return res.status(400).json({ error: 'This user already has this book issued' });
+        }
+
+        // Issue the book - insert record and decrease available_copies
+        db.run('INSERT INTO issued_books (book_id, user_id, status) VALUES (?, ?, ?)', [book_id, user_id, 'Issued'], function(err) {
+          if (err) return res.status(500).json({ error: 'Failed to issue book' });
+
+          db.run('UPDATE books SET available_copies = available_copies - 1 WHERE id = ?', [book_id], function(err) {
+            if (err) return res.status(500).json({ error: 'Failed to update book availability' });
+
+            res.status(201).json({ id: this.lastID, message: 'Book issued successfully' });
+          });
+        });
+      });
+    });
+  });
+});
+
+// PUT /api/issued-books/:id/return - Return a book
+app.put('/api/issued-books/:id/return', (req, res) => {
+  const { id } = req.params;
+
+  db.get('SELECT * FROM issued_books WHERE id = ?', [id], (err, issued) => {
+    if (err) return res.status(500).json({ error: 'Database error' });
+    if (!issued) return res.status(404).json({ error: 'Issued record not found' });
+    if (issued.status === 'Returned') {
+      return res.status(400).json({ error: 'This book has already been returned' });
+    }
+
+    db.run('UPDATE issued_books SET status = ?, return_date = CURRENT_TIMESTAMP WHERE id = ?', ['Returned', id], function(err) {
+      if (err) return res.status(500).json({ error: 'Failed to return book' });
+
+      db.run('UPDATE books SET available_copies = available_copies + 1 WHERE id = ?', [issued.book_id], function(err) {
+        if (err) return res.status(500).json({ error: 'Failed to update book availability' });
+
+        res.json({ message: 'Book returned successfully' });
+      });
     });
   });
 });

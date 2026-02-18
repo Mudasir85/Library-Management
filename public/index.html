@@ -190,6 +190,7 @@
 
     .stat-icon.users { background: #e8f0fe; color: #1a73e8; }
     .stat-icon.books { background: #fce8e6; color: #d93025; }
+    .stat-icon.issued { background: #fff3cd; color: #856404; }
 
     .stat-info h3 {
       font-size: 28px;
@@ -405,6 +406,55 @@
       color: #ccc;
     }
 
+    .badge-available {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #d4edda;
+      color: #155724;
+    }
+
+    .badge-not-available {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #f8d7da;
+      color: #721c24;
+    }
+
+    .badge-issued {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #fff3cd;
+      color: #856404;
+    }
+
+    .badge-returned {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #d4edda;
+      color: #155724;
+    }
+
+    .btn-return {
+      background: #28a745;
+      color: #fff;
+      padding: 6px 14px;
+      font-size: 13px;
+    }
+
+    .btn-return:hover { background: #218838; }
+
     /* Welcome section */
     .welcome-card {
       background: linear-gradient(135deg, #1a73e8 0%, #4285f4 100%);
@@ -498,6 +548,11 @@
             <span class="nav-icon">&#128214;</span> Books
           </a>
         </li>
+        <li>
+          <a href="#" data-section="issue-books" onclick="navigateTo('issue-books', this)">
+            <span class="nav-icon">&#128196;</span> Issue Books
+          </a>
+        </li>
       </ul>
       <div class="sidebar-section">Other</div>
       <ul class="sidebar-nav">
@@ -532,6 +587,13 @@
             <div class="stat-info">
               <h3 id="totalBooks">0</h3>
               <p>Total Books</p>
+            </div>
+          </div>
+          <div class="stat-card" onclick="navigateTo('issue-books', document.querySelector('[data-section=issue-books]'))">
+            <div class="stat-icon issued">&#128196;</div>
+            <div class="stat-info">
+              <h3 id="totalIssued">0</h3>
+              <p>Books Issued</p>
             </div>
           </div>
         </div>
@@ -671,6 +733,10 @@
                 <label for="publisherName">Publisher Name *</label>
                 <input type="text" id="publisherName" placeholder="Enter publisher name" required minlength="2" maxlength="100">
               </div>
+              <div class="form-group">
+                <label for="totalCopies">Total Copies *</label>
+                <input type="number" id="totalCopies" placeholder="Number of copies" required min="1" max="9999" value="1">
+              </div>
               <div class="form-group full-width">
                 <label>Book Image (optional)</label>
                 <div class="image-upload-area" id="imageUploadArea">
@@ -703,11 +769,68 @@
                   <th>Class</th>
                   <th>Author</th>
                   <th>Publisher</th>
+                  <th>Total Copies</th>
+                  <th>Available</th>
+                  <th>Status</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody id="booksTableBody">
-                <tr><td colspan="7" class="empty-state">Loading books...</td></tr>
+                <tr><td colspan="10" class="empty-state">Loading books...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== ISSUE BOOKS SECTION ==================== -->
+      <div id="section-issue-books" class="section">
+        <div id="issueAlert" class="alert"></div>
+
+        <div class="card">
+          <h2 id="issueFormTitle">Issue a Book</h2>
+          <form id="issueForm">
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="issueBook">Select Book *</label>
+                <select id="issueBook" required>
+                  <option value="">Select a Book</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="issueUser">Select User *</label>
+                <select id="issueUser" required>
+                  <option value="">Select a User</option>
+                </select>
+              </div>
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Issue Book</button>
+              </div>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h2>Issued Books</h2>
+          </div>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Book Name</th>
+                  <th>Author</th>
+                  <th>Issued To</th>
+                  <th>Email</th>
+                  <th>Issue Date</th>
+                  <th>Return Date</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="issuedBooksBody">
+                <tr><td colspan="9" class="empty-state">Loading issued books...</td></tr>
               </tbody>
             </table>
           </div>
@@ -753,6 +876,7 @@
     if (section === 'dashboard') loadDashboard();
     if (section === 'users') loadUsers();
     if (section === 'books') loadBooks();
+    if (section === 'issue-books') loadIssueBooks();
   }
 
   function toggleSidebar() {
@@ -795,6 +919,7 @@
       // Update stat counters
       document.getElementById('totalUsers').textContent = stats.totalUsers;
       document.getElementById('totalBooks').textContent = stats.totalBooks;
+      document.getElementById('totalIssued').textContent = stats.totalIssued || 0;
 
       // Recent users (last 5)
       const recentUsers = users.slice(0, 5);
@@ -899,7 +1024,7 @@
       const url = isEdit ? '/api/users/' + id : '/api/users';
       const method = isEdit ? 'PUT' : 'POST';
 
-      const res = await authFetch(url, {
+      const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -972,11 +1097,18 @@
       const tbody = document.getElementById('booksTableBody');
 
       if (books.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No books found. Add one above.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No books found. Add one above.</td></tr>';
         return;
       }
 
-      tbody.innerHTML = books.map(b => `
+      tbody.innerHTML = books.map(b => {
+        const totalCopies = b.total_copies || 1;
+        const availableCopies = b.available_copies !== undefined ? b.available_copies : totalCopies;
+        const statusBadge = availableCopies > 0
+          ? '<span class="badge-available">Available</span>'
+          : '<span class="badge-not-available">Not Available</span>';
+
+        return `
         <tr>
           <td>${b.id}</td>
           <td>${b.book_image
@@ -986,12 +1118,15 @@
           <td>${escapeHtml(b.class)}</td>
           <td>${escapeHtml(b.author_name)}</td>
           <td>${escapeHtml(b.publisher_name)}</td>
+          <td>${totalCopies}</td>
+          <td>${availableCopies}</td>
+          <td>${statusBadge}</td>
           <td class="actions">
             <button class="btn btn-edit" onclick="editBook(${b.id})">Edit</button>
             <button class="btn btn-danger" onclick="deleteBook(${b.id}, '${escapeAttr(b.book_name)}')">Delete</button>
           </td>
-        </tr>
-      `).join('');
+        </tr>`;
+      }).join('');
     } catch {
       showAlert('bookAlert', 'Failed to load books', 'error');
     }
@@ -1045,11 +1180,18 @@
       return;
     }
 
+    const totalCopies = document.getElementById('totalCopies').value;
+    if (!totalCopies || parseInt(totalCopies) < 1 || parseInt(totalCopies) > 9999) {
+      showAlert('bookAlert', 'Total Copies must be between 1 and 9999', 'error');
+      return;
+    }
+
     const formData = new FormData();
     formData.append('book_name', bookName);
     formData.append('class', bookClass);
     formData.append('author_name', authorName);
     formData.append('publisher_name', publisherName);
+    formData.append('total_copies', totalCopies);
     if (bookImage) {
       formData.append('book_image', bookImage);
     }
@@ -1087,6 +1229,7 @@
       document.getElementById('bookClass').value = book.class;
       document.getElementById('authorName').value = book.author_name;
       document.getElementById('publisherName').value = book.publisher_name;
+      document.getElementById('totalCopies').value = book.total_copies || 1;
 
       // Show existing image preview
       const preview = document.getElementById('imagePreview');
@@ -1131,11 +1274,127 @@
   function resetBookForm() {
     document.getElementById('bookForm').reset();
     document.getElementById('bookId').value = '';
+    document.getElementById('totalCopies').value = 1;
     document.getElementById('imagePreview').style.display = 'none';
     document.getElementById('fileName').textContent = '';
     document.getElementById('bookFormTitle').textContent = 'Add New Book';
     document.getElementById('bookSubmitBtn').textContent = 'Add Book';
     document.getElementById('bookCancelBtn').style.display = 'none';
+  }
+
+  // ============ ISSUE BOOKS MANAGEMENT ============
+  async function loadIssueBooks() {
+    try {
+      // Load available books for dropdown
+      const booksRes = await fetch('/api/books/available');
+      const availableBooks = await booksRes.json();
+      const bookSelect = document.getElementById('issueBook');
+      bookSelect.innerHTML = '<option value="">Select a Book</option>';
+      availableBooks.forEach(b => {
+        bookSelect.innerHTML += `<option value="${b.id}">${escapeHtml(b.book_name)} - ${escapeHtml(b.author_name)} (${b.available_copies} available)</option>`;
+      });
+
+      // Load users for dropdown
+      const usersRes = await fetch('/api/users');
+      const users = await usersRes.json();
+      const userSelect = document.getElementById('issueUser');
+      userSelect.innerHTML = '<option value="">Select a User</option>';
+      users.forEach(u => {
+        userSelect.innerHTML += `<option value="${u.id}">${escapeHtml(u.full_name)} (${escapeHtml(u.email)})</option>`;
+      });
+
+      // Load issued books list
+      const issuedRes = await fetch('/api/issued-books');
+      const issuedBooks = await issuedRes.json();
+      const tbody = document.getElementById('issuedBooksBody');
+
+      if (issuedBooks.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No books issued yet.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = issuedBooks.map(ib => {
+        const issueDate = new Date(ib.issue_date).toLocaleDateString();
+        const returnDate = ib.return_date ? new Date(ib.return_date).toLocaleDateString() : '-';
+        const statusBadge = ib.status === 'Issued'
+          ? '<span class="badge-issued">Issued</span>'
+          : '<span class="badge-returned">Returned</span>';
+        const actionBtn = ib.status === 'Issued'
+          ? `<button class="btn btn-return" onclick="returnBook(${ib.id}, '${escapeAttr(ib.book_name)}')">Return</button>`
+          : '';
+
+        return `
+        <tr>
+          <td>${ib.id}</td>
+          <td>${escapeHtml(ib.book_name)}</td>
+          <td>${escapeHtml(ib.author_name)}</td>
+          <td>${escapeHtml(ib.user_name)}</td>
+          <td>${escapeHtml(ib.user_email)}</td>
+          <td>${issueDate}</td>
+          <td>${returnDate}</td>
+          <td>${statusBadge}</td>
+          <td class="actions">${actionBtn}</td>
+        </tr>`;
+      }).join('');
+    } catch {
+      showAlert('issueAlert', 'Failed to load issued books', 'error');
+    }
+  }
+
+  document.getElementById('issueForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const book_id = document.getElementById('issueBook').value;
+    const user_id = document.getElementById('issueUser').value;
+
+    if (!book_id) {
+      showAlert('issueAlert', 'Please select a book', 'error');
+      return;
+    }
+    if (!user_id) {
+      showAlert('issueAlert', 'Please select a user', 'error');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/issued-books', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ book_id: parseInt(book_id), user_id: parseInt(user_id) })
+      });
+
+      const result = await res.json();
+
+      if (!res.ok) {
+        showAlert('issueAlert', result.error || 'Failed to issue book', 'error');
+        return;
+      }
+
+      showAlert('issueAlert', 'Book issued successfully', 'success');
+      document.getElementById('issueForm').reset();
+      loadIssueBooks();
+    } catch {
+      showAlert('issueAlert', 'Failed to issue book', 'error');
+    }
+  });
+
+  async function returnBook(id, bookName) {
+    if (!confirm('Are you sure you want to return "' + bookName + '"?')) return;
+
+    try {
+      const res = await fetch('/api/issued-books/' + id + '/return', { method: 'PUT' });
+      const result = await res.json();
+
+      if (!res.ok) {
+        showAlert('issueAlert', result.error || 'Failed to return book', 'error');
+        return;
+      }
+
+      showAlert('issueAlert', 'Book returned successfully', 'success');
+      loadIssueBooks();
+    } catch {
+      showAlert('issueAlert', 'Failed to return book', 'error');
+    }
   }
 
   // ============ INITIAL LOAD ============
