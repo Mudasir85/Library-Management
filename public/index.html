@@ -1288,7 +1288,7 @@
   async function loadIssueBooks() {
     try {
       // Load available books for dropdown
-      const booksRes = await fetch('/api/books/available');
+      const booksRes = await fetch(BASE + '/api/books/available');
       const availableBooks = await booksRes.json();
       const bookSelect = document.getElementById('issueBook');
       bookSelect.innerHTML = '<option value="">Select a Book</option>';
@@ -1297,7 +1297,7 @@
       });
 
       // Load users for dropdown
-      const usersRes = await fetch('/api/users');
+      const usersRes = await fetch(BASE + '/api/users');
       const users = await usersRes.json();
       const userSelect = document.getElementById('issueUser');
       userSelect.innerHTML = '<option value="">Select a User</option>';
@@ -1306,7 +1306,7 @@
       });
 
       // Load issued books list
-      const issuedRes = await fetch('/api/issued-books');
+      const issuedRes = await fetch(BASE + '/api/issued-books');
       const issuedBooks = await issuedRes.json();
       const tbody = document.getElementById('issuedBooksBody');
 
@@ -1359,7 +1359,7 @@
     }
 
     try {
-      const res = await fetch('/api/issued-books', {
+      const res = await fetch(BASE + '/api/issued-books', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ book_id: parseInt(book_id), user_id: parseInt(user_id) })
@@ -1384,7 +1384,7 @@
     if (!confirm('Are you sure you want to return "' + bookName + '"?')) return;
 
     try {
-      const res = await fetch('/api/issued-books/' + id + '/return', { method: 'PUT' });
+      const res = await fetch(BASE + '/api/issued-books/' + id + '/return', { method: 'PUT' });
       const result = await res.json();
 
       if (!res.ok) {
