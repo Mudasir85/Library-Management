@@ -8,6 +8,8 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3001;
 const BASE = '/mohit';
+const FINE_PER_DAY = 5;
+app.set('trust proxy', 1);
 
 // In-memory session store: { token: { username, createdAt } }
 const sessions = {};
@@ -52,6 +54,22 @@ const upload = multer({
 // Middleware
 app.use(express.json());
 
+function formatDateForDb(date, endOfDay = false) {
+  if (!date) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return `${date} ${endOfDay ? '23:59:59' : '00:00:00'}`;
+  }
+  const parsed = new Date(date);
+  if (isNaN(parsed.getTime())) return null;
+  const y = parsed.getFullYear();
+  const m = String(parsed.getMonth() + 1).padStart(2, '0');
+  const d = String(parsed.getDate()).padStart(2, '0');
+  const hh = String(parsed.getHours()).padStart(2, '0');
+  const mm = String(parsed.getMinutes()).padStart(2, '0');
+  const ss = String(parsed.getSeconds()).padStart(2, '0');
+  return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
+}
+
 // Parse cookies from request
 function parseCookies(req) {
   const cookies = {};
@@ -81,6 +99,59 @@ function requireAuth(req, res, next) {
     return res.status(401).json({ error: 'Unauthorized. Please login.' });
   }
   return res.redirect(BASE + '/login.html');
+}
+
+function syncFines(cb) {
+  const overdueSql = `
+    SELECT
+      ib.id AS issued_book_id,
+      CASE
+        WHEN ib.status = 'Returned' THEN CAST(julianday(date(ib.return_date)) - julianday(date(ib.due_date)) AS INTEGER)
+        ELSE CAST(julianday(date('now', 'localtime')) - julianday(date(ib.due_date)) AS INTEGER)
+      END AS days_overdue
+    FROM issued_books ib
+    WHERE ib.due_date IS NOT NULL
+      AND (
+        (ib.status = 'Issued' AND date(ib.due_date) < date('now', 'localtime'))
+        OR (ib.status = 'Returned' AND ib.return_date IS NOT NULL AND date(ib.return_date) > date(ib.due_date))
+      )
+  `;
+
+  db.all(overdueSql, [], (err, rows) => {
+    if (err) return cb(err);
+    if (!rows || rows.length === 0) return cb(null);
+
+    let pending = rows.length;
+    let failed = false;
+
+    rows.forEach((r) => {
+      const days = Math.max(0, Number(r.days_overdue) || 0);
+      if (days === 0) {
+        pending -= 1;
+        if (pending === 0 && !failed) cb(null);
+        return;
+      }
+      const amount = Number((days * FINE_PER_DAY).toFixed(2));
+
+      db.run(
+        `INSERT INTO fines (issued_book_id, days_overdue, fine_amount, status)
+         VALUES (?, ?, ?, 'Pending')
+         ON CONFLICT(issued_book_id) DO UPDATE SET
+           days_overdue = excluded.days_overdue,
+           fine_amount = excluded.fine_amount
+         WHERE fines.status = 'Pending'`,
+        [r.issued_book_id, days, amount],
+        (upsertErr) => {
+          pending -= 1;
+          if (upsertErr && !failed) {
+            failed = true;
+            return cb(upsertErr);
+          }
+          if (pending === 0 && !failed) cb(null);
+        }
+      );
+    });
+  });
 }
 
 // Serve login.html publicly
@@ -198,6 +269,20 @@ db.all("PRAGMA table_info(issued_books)", [], (err, columns) => {
   }
 });
 
+// Create fines table
+db.run(`
+  CREATE TABLE IF NOT EXISTS fines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    issued_book_id INTEGER NOT NULL UNIQUE,
+    days_overdue INTEGER NOT NULL DEFAULT 0,
+    fine_amount REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'Pending',
+    collected_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (issued_book_id) REFERENCES issued_books(id)
+  )
+`);
+
 // Default admin credentials
 const ADMIN_USERNAME = 'admin';
 const ADMIN_PASSWORD = 'admin123';
@@ -216,9 +301,12 @@ app.post('/api/login', (req, res) => {
     sessions[token] = { username, createdAt: Date.now() };
 
     // Set cookie (httpOnly so JS can't steal it)
+    const isSecure = req.secure || req.headers['x-forwarded-proto'] === 'https';
     res.cookie('session_token', token, {
       httpOnly: true,
       sameSite: 'strict',
+      secure: isSecure,
+      path: '/',
       maxAge: 24 * 60 * 60 * 1000 // 24 hours
     });
 
@@ -226,6 +314,27 @@ app.post('/api/login', (req, res) => {
   }
 
   return res.status(401).json({ error: 'Invalid username or password' });
+});
+
+// POST /api/logout - End session
+app.post('/api/logout', (req, res) => {
+  const token = parseCookies(req).session_token;
+  if (token && sessions[token]) {
+    delete sessions[token];
+  }
+  res.clearCookie('session_token', { path: '/' });
+  return res.json({ message: 'Logout successful' });
+});
+
+// Protect all API routes except login/logout
+app.use('/api', (req, res, next) => {
+  if (req.path === '/login' || req.path === '/logout') {
+    return next();
+  }
+  if (isAuthenticated(req)) {
+    return next();
+  }
+  return res.status(401).json({ error: 'Unauthorized. Please login.' });
 });
 
 // GET /api/dashboard/stats - Dashboard statistics
@@ -570,7 +679,7 @@ app.get('/api/issued-books', (req, res) => {
 // GET /api/issued-books/summary - Issue summary stats
 app.get('/api/issued-books/summary', (req, res) => {
   const summary = {};
-  db.get("SELECT COUNT(*) as count FROM issued_books WHERE status = 'Issued'", [], (err, row) => {
+  db.get("SELECT COUNT(*) as count FROM issued_books WHERE status = 'Issued' AND (due_date IS NULL OR date(due_date) >= date('now', 'localtime'))", [], (err, row) => {
     if (err) return res.status(500).json({ error: 'Failed to fetch summary' });
     summary.totalIssued = row ? row.count : 0;
 
@@ -578,7 +687,7 @@ app.get('/api/issued-books/summary', (req, res) => {
       if (err2) return res.status(500).json({ error: 'Failed to fetch summary' });
       summary.totalReturned = row2 ? row2.count : 0;
 
-      db.get("SELECT COUNT(*) as count FROM issued_books WHERE status = 'Issued' AND due_date < datetime('now')", [], (err3, row3) => {
+      db.get("SELECT COUNT(*) as count FROM issued_books WHERE status = 'Issued' AND due_date IS NOT NULL AND date(due_date) < date('now', 'localtime')", [], (err3, row3) => {
         if (err3) return res.status(500).json({ error: 'Failed to fetch summary' });
         summary.totalOverdue = row3 ? row3.count : 0;
 
@@ -590,7 +699,7 @@ app.get('/api/issued-books/summary', (req, res) => {
 
 // POST /api/issued-books - Issue a book
 app.post('/api/issued-books', (req, res) => {
-  const { book_id, user_id } = req.body;
+  const { book_id, user_id, issue_date, due_date } = req.body;
   const errors = [];
 
   if (!book_id) errors.push('Book is required');
@@ -598,6 +707,25 @@ app.post('/api/issued-books', (req, res) => {
 
   if (errors.length > 0) {
     return res.status(400).json({ error: errors.join(', ') });
+  }
+
+  const issueDateDb = formatDateForDb(issue_date || new Date().toISOString().slice(0, 10));
+  let dueDateDb = formatDateForDb(due_date || null, true);
+
+  if (!issueDateDb) {
+    return res.status(400).json({ error: 'Invalid issue date' });
+  }
+  if (!dueDateDb) {
+    const fallbackDue = new Date(issueDateDb.replace(' ', 'T'));
+    fallbackDue.setDate(fallbackDue.getDate() + 14);
+    const y = fallbackDue.getFullYear();
+    const m = String(fallbackDue.getMonth() + 1).padStart(2, '0');
+    const d = String(fallbackDue.getDate()).padStart(2, '0');
+    dueDateDb = `${y}-${m}-${d} 23:59:59`;
+  }
+
+  if (dueDateDb < issueDateDb) {
+    return res.status(400).json({ error: 'Due date cannot be earlier than issue date' });
   }
 
   // Check if book has available copies
@@ -620,14 +748,7 @@ app.post('/api/issued-books', (req, res) => {
           return res.status(400).json({ error: 'This user already has this book issued' });
         }
 
-        // Issue the book - set issue_date to today and due_date to 14 days from today
-        const today = new Date();
-        const dueDate = new Date(today);
-        dueDate.setDate(dueDate.getDate() + 14);
-        const issueDateStr = today.toISOString().slice(0, 19).replace('T', ' ');
-        const dueDateStr = dueDate.toISOString().slice(0, 19).replace('T', ' ');
-
-        db.run('INSERT INTO issued_books (book_id, user_id, issue_date, due_date, status) VALUES (?, ?, ?, ?, ?)', [book_id, user_id, issueDateStr, dueDateStr, 'Issued'], function(err) {
+        db.run('INSERT INTO issued_books (book_id, user_id, issue_date, due_date, status) VALUES (?, ?, ?, ?, ?)', [book_id, user_id, issueDateDb, dueDateDb, 'Issued'], function(err) {
           if (err) return res.status(500).json({ error: 'Failed to issue book' });
 
           const insertedId = this.lastID;
@@ -645,6 +766,7 @@ app.post('/api/issued-books', (req, res) => {
 // PUT /api/issued-books/:id/return - Return a book
 app.put('/api/issued-books/:id/return', (req, res) => {
   const { id } = req.params;
+  const { return_date } = req.body || {};
 
   db.get('SELECT * FROM issued_books WHERE id = ?', [id], (err, issued) => {
     if (err) return res.status(500).json({ error: 'Database error' });
@@ -653,7 +775,15 @@ app.put('/api/issued-books/:id/return', (req, res) => {
       return res.status(400).json({ error: 'This book has already been returned' });
     }
 
-    db.run('UPDATE issued_books SET status = ?, return_date = CURRENT_TIMESTAMP WHERE id = ?', ['Returned', id], function(err) {
+    const returnDateDb = formatDateForDb(return_date || new Date().toISOString().slice(0, 10), true);
+    if (!returnDateDb) {
+      return res.status(400).json({ error: 'Invalid return date' });
+    }
+    if (issued.issue_date && returnDateDb < issued.issue_date) {
+      return res.status(400).json({ error: 'Return date cannot be earlier than issue date' });
+    }
+
+    db.run('UPDATE issued_books SET status = ?, return_date = ? WHERE id = ?', ['Returned', returnDateDb, id], function(err) {
       if (err) return res.status(500).json({ error: 'Failed to return book' });
 
       db.run('UPDATE books SET available_copies = available_copies + 1 WHERE id = ?', [issued.book_id], function(err) {
@@ -663,6 +793,65 @@ app.put('/api/issued-books/:id/return', (req, res) => {
       });
     });
   });
+});
+
+// --- FINES API ---
+app.get('/api/fines/summary', (req, res) => {
+  syncFines((syncErr) => {
+    if (syncErr) return res.status(500).json({ error: 'Failed to fetch fine summary' });
+
+    const summary = { totalCollected: 0, totalPending: 0 };
+    db.get("SELECT ROUND(COALESCE(SUM(fine_amount), 0), 2) AS total FROM fines WHERE status = 'Collected'", [], (err, collected) => {
+      if (err) return res.status(500).json({ error: 'Failed to fetch fine summary' });
+      summary.totalCollected = Number(collected?.total || 0);
+
+      db.get("SELECT ROUND(COALESCE(SUM(fine_amount), 0), 2) AS total FROM fines WHERE status = 'Pending'", [], (err2, pending) => {
+        if (err2) return res.status(500).json({ error: 'Failed to fetch fine summary' });
+        summary.totalPending = Number(pending?.total || 0);
+        res.json(summary);
+      });
+    });
+  });
+});
+
+app.get('/api/fines', (req, res) => {
+  syncFines((syncErr) => {
+    if (syncErr) return res.status(500).json({ error: 'Failed to fetch fines' });
+
+    db.all(
+      `SELECT
+         f.id,
+         f.issued_book_id,
+         u.full_name AS user_name,
+         b.book_name,
+         f.days_overdue,
+         ROUND(f.fine_amount, 2) AS fine_amount,
+         f.status
+       FROM fines f
+       JOIN issued_books ib ON ib.id = f.issued_book_id
+       JOIN users u ON u.id = ib.user_id
+       JOIN books b ON b.id = ib.book_id
+       ORDER BY f.id DESC`,
+      [],
+      (err, rows) => {
+        if (err) return res.status(500).json({ error: 'Failed to fetch fines' });
+        res.json(rows);
+      }
+    );
+  });
+});
+
+app.post('/api/fines/:id/collect', (req, res) => {
+  const { id } = req.params;
+  db.run(
+    "UPDATE fines SET status = 'Collected', collected_at = datetime('now') WHERE id = ? AND status = 'Pending'",
+    [id],
+    function (err) {
+      if (err) return res.status(500).json({ error: 'Failed to collect fine' });
+      if (this.changes === 0) return res.status(400).json({ error: 'Fine already collected or not found' });
+      return res.json({ message: 'Fine collected successfully' });
+    }
+  );
 });
 
 // --- CONTACTS API ---

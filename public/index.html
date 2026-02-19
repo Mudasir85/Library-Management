@@ -456,6 +456,26 @@
       color: #721c24;
     }
 
+    .badge-pending {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #fff3cd;
+      color: #856404;
+    }
+
+    .badge-collected {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #d4edda;
+      color: #155724;
+    }
+
     .btn-return {
       background: #28a745;
       color: #fff;
@@ -464,6 +484,15 @@
     }
 
     .btn-return:hover { background: #218838; }
+
+    .btn-collect {
+      background: #1a73e8;
+      color: #fff;
+      padding: 6px 14px;
+      font-size: 13px;
+    }
+
+    .btn-collect:hover { background: #1557b0; }
 
     .search-box {
       padding: 10px 14px;
@@ -613,6 +642,11 @@
         <li>
           <a href="#" data-section="issue-books" onclick="navigateTo('issue-books', this)">
             <span class="nav-icon">&#128196;</span> Issue Books
+          </a>
+        </li>
+        <li>
+          <a href="#" data-section="fines" onclick="navigateTo('fines', this)">
+            <span class="nav-icon">&#128176;</span> Fines
           </a>
         </li>
       </ul>
@@ -892,11 +926,11 @@
               </div>
               <div class="form-group">
                 <label for="issueDate">Issue Date</label>
-                <input type="text" id="issueDate" readonly style="background:#f0f2f5; cursor:not-allowed;">
+                <input type="date" id="issueDate" required>
               </div>
               <div class="form-group">
-                <label for="dueDate">Due Date (14 days)</label>
-                <input type="text" id="dueDate" readonly style="background:#f0f2f5; cursor:not-allowed;">
+                <label for="dueDate">Due Date</label>
+                <input type="date" id="dueDate" required>
               </div>
               <div class="form-actions">
                 <button type="submit" class="btn btn-primary">Issue Book</button>
@@ -934,6 +968,52 @@
         </div>
       </div>
 
+      <!-- ==================== FINES SECTION ==================== -->
+      <div id="section-fines" class="section">
+        <div id="fineAlert" class="alert"></div>
+
+        <div class="issue-summary-grid">
+          <div class="summary-card">
+            <div class="summary-icon s-returned">&#128181;</div>
+            <div class="summary-info">
+              <h3 id="summaryCollectedFines">0</h3>
+              <p>Total Collected Fines</p>
+            </div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-icon s-overdue">&#128184;</div>
+            <div class="summary-info">
+              <h3 id="summaryPendingFines">0</h3>
+              <p>Total Pending Fines</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h2>Fines List</h2>
+          </div>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Fine ID</th>
+                  <th>User</th>
+                  <th>Book Title</th>
+                  <th>Days Overdue</th>
+                  <th>Fine Amount</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="finesTableBody">
+                <tr><td colspan="7" class="empty-state">Loading fines...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
     </div><!-- /.main-content -->
   </div><!-- /.layout -->
 
@@ -946,9 +1026,10 @@
 
   document.getElementById('headerUser').textContent = 'Welcome, Admin';
 
-  function logout() {
-    // Clear cookie by requesting a page without credentials, then redirect
-    document.cookie = 'session_token=; Path=/; Max-Age=0';
+  async function logout() {
+    try {
+      await fetch(BASE + '/api/logout', { method: 'POST' });
+    } catch {}
     sessionStorage.removeItem('loggedIn');
     sessionStorage.removeItem('loggedInUser');
     window.location.href = BASE + '/login.html';
@@ -976,6 +1057,7 @@
     if (section === 'users') loadUsers();
     if (section === 'books') loadBooks();
     if (section === 'issue-books') loadIssueBooks();
+    if (section === 'fines') loadFines();
   }
 
   function toggleSidebar() {
@@ -1384,13 +1466,20 @@
   // ============ ISSUE BOOKS MANAGEMENT ============
   let allIssuedBooks = []; // Store for search filtering
 
-  // Auto-set Issue Date and Due Date fields in the form
+  function formatYmd(dateObj) {
+    const y = dateObj.getFullYear();
+    const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const d = String(dateObj.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  // Auto-set Issue Date and Due Date fields in the form (calendar inputs)
   function setIssueDates() {
     const today = new Date();
     const dueDate = new Date(today);
     dueDate.setDate(dueDate.getDate() + 14);
-    document.getElementById('issueDate').value = today.toLocaleDateString();
-    document.getElementById('dueDate').value = dueDate.toLocaleDateString();
+    document.getElementById('issueDate').value = formatYmd(today);
+    document.getElementById('dueDate').value = formatYmd(dueDate);
   }
 
   function formatDate(dateStr) {
@@ -1402,12 +1491,17 @@
 
   function getStatusInfo(ib) {
     const now = new Date();
+    now.setHours(0, 0, 0, 0);
     if (ib.status === 'Returned') {
       return { badge: '<span class="badge-returned">Returned</span>', label: 'Returned' };
     }
     // Check if overdue (status is Issued and due_date has passed)
-    if (ib.due_date && new Date(ib.due_date) < now) {
-      return { badge: '<span class="badge-overdue">Overdue</span>', label: 'Overdue' };
+    if (ib.due_date) {
+      const due = new Date(ib.due_date);
+      due.setHours(0, 0, 0, 0);
+      if (due < now) {
+        return { badge: '<span class="badge-overdue">Overdue</span>', label: 'Overdue' };
+      }
     }
     return { badge: '<span class="badge-issued">Issued</span>', label: 'Issued' };
   }
@@ -1424,8 +1518,9 @@
       const dueDate = formatDate(ib.due_date);
       const returnDate = formatDate(ib.return_date);
       const statusInfo = getStatusInfo(ib);
+      const defaultReturnDate = formatYmd(new Date());
       const actionBtn = ib.status === 'Issued'
-        ? `<button class="btn btn-return" onclick="returnBook(${ib.id}, '${escapeAttr(ib.book_name)}')">Return</button>`
+        ? `<div class="actions"><input type="date" id="returnDate-${ib.id}" value="${defaultReturnDate}"><button class="btn btn-return" onclick="returnBook(${ib.id}, '${escapeAttr(ib.book_name)}')">Return</button></div>`
         : '';
 
       return `
@@ -1518,6 +1613,8 @@
 
     const book_id = document.getElementById('issueBook').value;
     const user_id = document.getElementById('issueUser').value;
+    const issue_date = document.getElementById('issueDate').value;
+    const due_date = document.getElementById('dueDate').value;
 
     if (!book_id) {
       showAlert('issueAlert', 'Please select a book', 'error');
@@ -1527,12 +1624,29 @@
       showAlert('issueAlert', 'Please select a user', 'error');
       return;
     }
+    if (!issue_date) {
+      showAlert('issueAlert', 'Please select issue date', 'error');
+      return;
+    }
+    if (!due_date) {
+      showAlert('issueAlert', 'Please select due date', 'error');
+      return;
+    }
+    if (due_date < issue_date) {
+      showAlert('issueAlert', 'Due date cannot be earlier than issue date', 'error');
+      return;
+    }
 
     try {
       const res = await fetch(BASE + '/api/issued-books', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ book_id: parseInt(book_id), user_id: parseInt(user_id) })
+        body: JSON.stringify({
+          book_id: parseInt(book_id, 10),
+          user_id: parseInt(user_id, 10),
+          issue_date,
+          due_date
+        })
       });
 
       const result = await res.json();
@@ -1552,10 +1666,21 @@
   });
 
   async function returnBook(id, bookName) {
+    const returnDateInput = document.getElementById('returnDate-' + id);
+    const return_date = returnDateInput ? returnDateInput.value : '';
+    if (!return_date) {
+      showAlert('issueAlert', 'Please select return date', 'error');
+      return;
+    }
+
     if (!confirm('Are you sure you want to return "' + bookName + '"?')) return;
 
     try {
-      const res = await fetch(BASE + '/api/issued-books/' + id + '/return', { method: 'PUT' });
+      const res = await fetch(BASE + '/api/issued-books/' + id + '/return', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ return_date })
+      });
       const result = await res.json();
 
       if (!res.ok) {
@@ -1567,6 +1692,77 @@
       loadIssueBooks();
     } catch {
       showAlert('issueAlert', 'Failed to return book', 'error');
+    }
+  }
+
+  document.getElementById('issueDate').addEventListener('change', (e) => {
+    const selected = e.target.value;
+    if (!selected) return;
+    const d = new Date(selected + 'T00:00:00');
+    d.setDate(d.getDate() + 14);
+    document.getElementById('dueDate').value = formatYmd(d);
+  });
+
+  // ============ FINES MANAGEMENT ============
+  function renderFines(fines) {
+    const tbody = document.getElementById('finesTableBody');
+    if (!fines || fines.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No fines found.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = fines.map((f) => {
+      const statusBadge = f.status === 'Collected'
+        ? '<span class="badge-collected">Collected</span>'
+        : '<span class="badge-pending">Pending</span>';
+      const actionBtn = f.status === 'Pending'
+        ? `<button class="btn btn-collect" onclick="collectFine(${f.id})">Collect</button>`
+        : '-';
+      return `
+        <tr>
+          <td>${f.id}</td>
+          <td>${escapeHtml(f.user_name)}</td>
+          <td>${escapeHtml(f.book_name)}</td>
+          <td>${f.days_overdue}</td>
+          <td>${Number(f.fine_amount || 0).toFixed(2)}</td>
+          <td>${statusBadge}</td>
+          <td class="actions">${actionBtn}</td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  async function loadFineSummary() {
+    const res = await fetch(BASE + '/api/fines/summary');
+    const summary = await res.json();
+    document.getElementById('summaryCollectedFines').textContent = Number(summary.totalCollected || 0).toFixed(2);
+    document.getElementById('summaryPendingFines').textContent = Number(summary.totalPending || 0).toFixed(2);
+  }
+
+  async function loadFines() {
+    try {
+      await loadFineSummary();
+      const res = await fetch(BASE + '/api/fines');
+      const fines = await res.json();
+      renderFines(fines);
+    } catch {
+      showAlert('fineAlert', 'Failed to load fines', 'error');
+    }
+  }
+
+  async function collectFine(id) {
+    if (!confirm('Mark this fine as collected?')) return;
+    try {
+      const res = await fetch(BASE + '/api/fines/' + id + '/collect', { method: 'POST' });
+      const result = await res.json();
+      if (!res.ok) {
+        showAlert('fineAlert', result.error || 'Failed to collect fine', 'error');
+        return;
+      }
+      showAlert('fineAlert', 'Fine collected successfully', 'success');
+      loadFines();
+    } catch {
+      showAlert('fineAlert', 'Failed to collect fine', 'error');
     }
   }
 
