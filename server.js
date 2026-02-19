@@ -11,6 +11,14 @@ const BASE = '/mohit';
 const FINE_PER_DAY = 5;
 app.set('trust proxy', 1);
 
+// Accept both prefixed (/mohit/...) and non-prefixed (...) routes.
+app.use((req, res, next) => {
+  if (req.url === BASE || req.url.startsWith(BASE + '/')) {
+    req.url = req.url.slice(BASE.length) || '/';
+  }
+  next();
+});
+
 // In-memory session store: { token: { username, createdAt } }
 const sessions = {};
 
@@ -70,6 +78,23 @@ function formatDateForDb(date, endOfDay = false) {
   return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
 }
 
+function normalizeStatus(status) {
+  return String(status || '').trim().toLowerCase();
+}
+
+function parseDateValue(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
+}
+
+function startOfDay(date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
 // Parse cookies from request
 function parseCookies(req) {
   const cookies = {};
@@ -102,54 +127,71 @@ function requireAuth(req, res, next) {
 }
 
 function syncFines(cb) {
-  const overdueSql = `
-    SELECT
-      ib.id AS issued_book_id,
-      CASE
-        WHEN ib.status = 'Returned' THEN CAST(julianday(date(ib.return_date)) - julianday(date(ib.due_date)) AS INTEGER)
-        ELSE CAST(julianday(date('now', 'localtime')) - julianday(date(ib.due_date)) AS INTEGER)
-      END AS days_overdue
-    FROM issued_books ib
-    WHERE ib.due_date IS NOT NULL
-      AND (
-        (ib.status = 'Issued' AND date(ib.due_date) < date('now', 'localtime'))
-        OR (ib.status = 'Returned' AND ib.return_date IS NOT NULL AND date(ib.return_date) > date(ib.due_date))
-      )
-  `;
-
-  db.all(overdueSql, [], (err, rows) => {
+  db.all('SELECT id, due_date, return_date, status FROM issued_books', [], (err, rows) => {
     if (err) return cb(err);
-    if (!rows || rows.length === 0) return cb(null);
 
-    let pending = rows.length;
-    let failed = false;
+    const today = startOfDay(new Date());
+    const overdueRows = [];
 
-    rows.forEach((r) => {
-      const days = Math.max(0, Number(r.days_overdue) || 0);
-      if (days === 0) {
-        pending -= 1;
-        if (pending === 0 && !failed) cb(null);
-        return;
+    rows.forEach((row) => {
+      const status = normalizeStatus(row.status);
+      const dueDate = parseDateValue(row.due_date);
+      if (!dueDate) return;
+
+      const dueDay = startOfDay(dueDate);
+      let daysOverdue = 0;
+
+      if (status === 'issued') {
+        const diffMs = today.getTime() - dueDay.getTime();
+        daysOverdue = Math.floor(diffMs / (24 * 60 * 60 * 1000));
+      } else if (status === 'returned') {
+        const returnDate = parseDateValue(row.return_date);
+        if (!returnDate) return;
+        const returnDay = startOfDay(returnDate);
+        const diffMs = returnDay.getTime() - dueDay.getTime();
+        daysOverdue = Math.floor(diffMs / (24 * 60 * 60 * 1000));
       }
-      const amount = Number((days * FINE_PER_DAY).toFixed(2));
 
-      db.run(
-        `INSERT INTO fines (issued_book_id, days_overdue, fine_amount, status)
-         VALUES (?, ?, ?, 'Pending')
-         ON CONFLICT(issued_book_id) DO UPDATE SET
-           days_overdue = excluded.days_overdue,
-           fine_amount = excluded.fine_amount
-         WHERE fines.status = 'Pending'`,
-        [r.issued_book_id, days, amount],
-        (upsertErr) => {
-          pending -= 1;
-          if (upsertErr && !failed) {
-            failed = true;
-            return cb(upsertErr);
+      if (daysOverdue > 0) {
+        overdueRows.push({
+          issued_book_id: row.id,
+          days_overdue: daysOverdue,
+          fine_amount: Number((daysOverdue * FINE_PER_DAY).toFixed(2))
+        });
+      }
+    });
+
+    const overdueIds = overdueRows.map((r) => r.issued_book_id);
+    const deleteSql = overdueIds.length > 0
+      ? `DELETE FROM fines WHERE lower(trim(status)) = 'pending' AND issued_book_id NOT IN (${overdueIds.map(() => '?').join(',')})`
+      : `DELETE FROM fines WHERE lower(trim(status)) = 'pending'`;
+
+    db.run(deleteSql, overdueIds, (deleteErr) => {
+      if (deleteErr) return cb(deleteErr);
+      if (overdueRows.length === 0) return cb(null);
+
+      let pending = overdueRows.length;
+      let failed = false;
+
+      overdueRows.forEach((r) => {
+        db.run(
+          `INSERT INTO fines (issued_book_id, days_overdue, fine_amount, status)
+           VALUES (?, ?, ?, 'Pending')
+           ON CONFLICT(issued_book_id) DO UPDATE SET
+             days_overdue = excluded.days_overdue,
+             fine_amount = excluded.fine_amount
+           WHERE lower(trim(fines.status)) = 'pending'`,
+          [r.issued_book_id, r.days_overdue, r.fine_amount],
+          (upsertErr) => {
+            pending -= 1;
+            if (upsertErr && !failed) {
+              failed = true;
+              return cb(upsertErr);
+            }
+            if (pending === 0 && !failed) cb(null);
           }
-          if (pending === 0 && !failed) cb(null);
-        }
-      );
+        );
+      });
     });
   });
 }
@@ -322,7 +364,13 @@ app.post('/api/logout', (req, res) => {
   if (token && sessions[token]) {
     delete sessions[token];
   }
-  res.clearCookie('session_token', { path: '/' });
+  const isSecure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+  res.clearCookie('session_token', {
+    httpOnly: true,
+    sameSite: 'strict',
+    secure: isSecure,
+    path: '/'
+  });
   return res.json({ message: 'Logout successful' });
 });
 
@@ -678,21 +726,31 @@ app.get('/api/issued-books', (req, res) => {
 
 // GET /api/issued-books/summary - Issue summary stats
 app.get('/api/issued-books/summary', (req, res) => {
-  const summary = {};
-  db.get("SELECT COUNT(*) as count FROM issued_books WHERE status = 'Issued' AND (due_date IS NULL OR date(due_date) >= date('now', 'localtime'))", [], (err, row) => {
+  db.all('SELECT status, due_date FROM issued_books', [], (err, rows) => {
     if (err) return res.status(500).json({ error: 'Failed to fetch summary' });
-    summary.totalIssued = row ? row.count : 0;
 
-    db.get("SELECT COUNT(*) as count FROM issued_books WHERE status = 'Returned'", [], (err2, row2) => {
-      if (err2) return res.status(500).json({ error: 'Failed to fetch summary' });
-      summary.totalReturned = row2 ? row2.count : 0;
+    const today = startOfDay(new Date());
+    let totalIssued = 0;
+    let totalReturned = 0;
+    let totalOverdue = 0;
 
-      db.get("SELECT COUNT(*) as count FROM issued_books WHERE status = 'Issued' AND due_date IS NOT NULL AND date(due_date) < date('now', 'localtime')", [], (err3, row3) => {
-        if (err3) return res.status(500).json({ error: 'Failed to fetch summary' });
-        summary.totalOverdue = row3 ? row3.count : 0;
+    rows.forEach((row) => {
+      const status = normalizeStatus(row.status);
+      if (status === 'issued') {
+        totalIssued += 1;
+        const dueDate = parseDateValue(row.due_date);
+        if (dueDate && startOfDay(dueDate) < today) {
+          totalOverdue += 1;
+        }
+      } else if (status === 'returned') {
+        totalReturned += 1;
+      }
+    });
 
-        res.json(summary);
-      });
+    res.json({
+      totalIssued,
+      totalReturned,
+      totalOverdue
     });
   });
 });
@@ -801,11 +859,11 @@ app.get('/api/fines/summary', (req, res) => {
     if (syncErr) return res.status(500).json({ error: 'Failed to fetch fine summary' });
 
     const summary = { totalCollected: 0, totalPending: 0 };
-    db.get("SELECT ROUND(COALESCE(SUM(fine_amount), 0), 2) AS total FROM fines WHERE status = 'Collected'", [], (err, collected) => {
+    db.get("SELECT ROUND(COALESCE(SUM(fine_amount), 0), 2) AS total FROM fines WHERE lower(trim(status)) = 'collected'", [], (err, collected) => {
       if (err) return res.status(500).json({ error: 'Failed to fetch fine summary' });
       summary.totalCollected = Number(collected?.total || 0);
 
-      db.get("SELECT ROUND(COALESCE(SUM(fine_amount), 0), 2) AS total FROM fines WHERE status = 'Pending'", [], (err2, pending) => {
+      db.get("SELECT ROUND(COALESCE(SUM(fine_amount), 0), 2) AS total FROM fines WHERE lower(trim(status)) = 'pending'", [], (err2, pending) => {
         if (err2) return res.status(500).json({ error: 'Failed to fetch fine summary' });
         summary.totalPending = Number(pending?.total || 0);
         res.json(summary);
@@ -822,15 +880,15 @@ app.get('/api/fines', (req, res) => {
       `SELECT
          f.id,
          f.issued_book_id,
-         u.full_name AS user_name,
-         b.book_name,
+         COALESCE(u.full_name, 'Unknown User') AS user_name,
+         COALESCE(b.book_name, 'Unknown Book') AS book_name,
          f.days_overdue,
          ROUND(f.fine_amount, 2) AS fine_amount,
          f.status
        FROM fines f
-       JOIN issued_books ib ON ib.id = f.issued_book_id
-       JOIN users u ON u.id = ib.user_id
-       JOIN books b ON b.id = ib.book_id
+       LEFT JOIN issued_books ib ON ib.id = f.issued_book_id
+       LEFT JOIN users u ON u.id = ib.user_id
+       LEFT JOIN books b ON b.id = ib.book_id
        ORDER BY f.id DESC`,
       [],
       (err, rows) => {
