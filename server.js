@@ -6,6 +6,33 @@ const path = require('path');
 const multer = require('multer');
 const fs = require('fs');
 
+function loadEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  const content = fs.readFileSync(filePath, 'utf8');
+  const lines = content.split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const eqIndex = line.indexOf('=');
+    if (eqIndex <= 0) continue;
+    const key = line.slice(0, eqIndex).trim();
+    if (!key || Object.prototype.hasOwnProperty.call(process.env, key)) continue;
+    let value = line.slice(eqIndex + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    process.env[key] = value;
+  }
+}
+
+loadEnvFile(path.join(__dirname, '.env'));
+if (String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production') {
+  loadEnvFile(path.join(__dirname, '.env.production'));
+}
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 const BASE = '/mohit';
@@ -118,19 +145,71 @@ function generatePaymentReference(prefix) {
 }
 
 function getPayPalBaseUrl() {
-  const mode = String(process.env.PAYPAL_MODE || 'sandbox').trim().toLowerCase();
+  const mode = String(
+    process.env.PAYPAL_MODE ||
+    process.env.PAYPAL_ENV ||
+    process.env.PAYPAL_ENVIRONMENT ||
+    'sandbox'
+  ).trim().toLowerCase();
   return mode === 'live' ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com';
 }
 
+function getFirstEnvValue(keys) {
+  for (const key of keys) {
+    const value = String(process.env[key] || '').trim();
+    if (value) return value;
+  }
+  return '';
+}
+
 function getPayPalCredentials() {
+  const mode = String(
+    process.env.PAYPAL_MODE ||
+    process.env.PAYPAL_ENV ||
+    process.env.PAYPAL_ENVIRONMENT ||
+    'sandbox'
+  ).trim().toLowerCase();
+  const isLiveMode = mode === 'live';
+
+  const clientId = getFirstEnvValue(
+    isLiveMode
+      ? [
+          'PAYPAL_LIVE_CLIENT_ID',
+          'PAYPAL_CLIENT_ID_LIVE',
+          'PAYPAL_CLIENT_ID',
+          'PAYPAL_CLIENTID'
+        ]
+      : [
+          'PAYPAL_SANDBOX_CLIENT_ID',
+          'PAYPAL_CLIENT_ID_SANDBOX',
+          'PAYPAL_CLIENT_ID',
+          'PAYPAL_CLIENTID'
+        ]
+  );
+  const clientSecret = getFirstEnvValue(
+    isLiveMode
+      ? [
+          'PAYPAL_LIVE_CLIENT_SECRET',
+          'PAYPAL_CLIENT_SECRET_LIVE',
+          'PAYPAL_CLIENT_SECRET',
+          'PAYPAL_SECRET'
+        ]
+      : [
+          'PAYPAL_SANDBOX_CLIENT_SECRET',
+          'PAYPAL_CLIENT_SECRET_SANDBOX',
+          'PAYPAL_CLIENT_SECRET',
+          'PAYPAL_SECRET'
+        ]
+  );
+
   return {
-    clientId: String(process.env.PAYPAL_CLIENT_ID || '').trim(),
-    clientSecret: String(process.env.PAYPAL_CLIENT_SECRET || '').trim()
+    clientId,
+    clientSecret
   };
 }
 
 function getPayPalCurrencyCode() {
-  return String(process.env.PAYPAL_CURRENCY || 'USD').trim().toUpperCase();
+  return String(process.env.PAYPAL_CURRENCY || process.env.CURRENCY || 'USD').trim().toUpperCase();
 }
 
 function paypalHttpRequest(options, body, cb) {
