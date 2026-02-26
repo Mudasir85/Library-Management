@@ -1237,6 +1237,7 @@
   let selectedFineForCollection = null;
   let collectPayPalSdkLoaded = false;
   let collectPayPalButtonsRenderedForFineId = null;
+  let collectPayPalConfig = null;
 
   document.getElementById('headerUser').textContent = 'Welcome, Admin';
 
@@ -2365,6 +2366,7 @@
     if (!cfgRes.ok) {
       throw new Error(cfg.error || 'PayPal is not configured');
     }
+    collectPayPalConfig = cfg;
 
     await new Promise((resolve, reject) => {
       const script = document.createElement('script');
@@ -2388,21 +2390,30 @@
     const container = document.getElementById('collectPaypalButtonContainer');
     container.innerHTML = '';
 
-    window.paypal.Buttons({
-      createOrder: async () => {
-        const { res, data } = await apiPostJson('/api/fines/' + fineId + '/paypal/create-order', {});
-        if (!res.ok || !data.order_id) {
-          throw new Error(data.error || 'Failed to create PayPal order');
-        }
-        return data.order_id;
-      },
-      onApprove: async (data) => {
+    const onApproveHandler = async (data, actions) => {
         const paymentNotes = document.getElementById('collectPaymentNotes').value.trim();
-        const { res, data: result } = await apiPostJson('/api/fines/' + fineId + '/collect', {
+        const payload = {
           payment_type: 'Online',
           payment_notes: paymentNotes,
           paypal_order_id: data.orderID
-        });
+        };
+
+        if (!(collectPayPalConfig && collectPayPalConfig.server_capture_enabled)) {
+          const captureResult = await actions.order.capture();
+          const purchaseUnit = captureResult && captureResult.purchase_units ? captureResult.purchase_units[0] : null;
+          const captureInfo = purchaseUnit && purchaseUnit.payments && purchaseUnit.payments.captures ? purchaseUnit.payments.captures[0] : null;
+          const captureId = captureInfo && captureInfo.id ? String(captureInfo.id).trim() : '';
+          if (!captureId) {
+            throw new Error('PayPal capture id not found');
+          }
+
+          payload.paypal_capture_id = captureId;
+          payload.paypal_payer_email = String(captureResult?.payer?.email_address || '').trim();
+          payload.paypal_payer_id = String(captureResult?.payer?.payer_id || '').trim();
+          payload.paypal_captured_on_client = true;
+        }
+
+        const { res, data: result } = await apiPostJson('/api/fines/' + fineId + '/collect', payload);
         if (!res.ok) {
           showAlert('collectFineAlert', result.error || 'PayPal payment failed', 'error');
           return;
@@ -2414,12 +2425,45 @@
           cancelFineCollection();
           showAlert('fineAlert', 'Fine collected and payment record saved (Online)', 'success');
         }, 700);
-      },
-      onError: (err) => {
+      };
+
+    const onErrorHandler = (err) => {
         const message = err && err.message ? err.message : 'Unable to process PayPal payment';
         showAlert('collectFineAlert', message, 'error');
-      }
-    }).render('#collectPaypalButtonContainer');
+      };
+
+    const paypalButtons = (collectPayPalConfig && collectPayPalConfig.server_capture_enabled)
+      ? window.paypal.Buttons({
+          createOrder: async () => {
+            const { res, data } = await apiPostJson('/api/fines/' + fineId + '/paypal/create-order', {});
+            if (!res.ok || !data.order_id) {
+              throw new Error(data.error || 'Failed to create PayPal order');
+            }
+            return data.order_id;
+          },
+          onApprove: onApproveHandler,
+          onError: onErrorHandler
+        })
+      : window.paypal.Buttons({
+          createOrder: (data, actions) => actions.order.create({
+            intent: 'CAPTURE',
+            purchase_units: [{
+              amount: {
+                currency_code: (collectPayPalConfig && collectPayPalConfig.currency) || 'USD',
+                value: Number(selectedFineForCollection?.fine_amount || 0).toFixed(2)
+              },
+              description: 'Library fine payment #' + fineId
+            }],
+            application_context: {
+              shipping_preference: 'NO_SHIPPING',
+              user_action: 'PAY_NOW'
+            }
+          }),
+          onApprove: onApproveHandler,
+          onError: onErrorHandler
+        });
+
+    paypalButtons.render('#collectPaypalButtonContainer');
 
     collectPayPalButtonsRenderedForFineId = fineId;
   }

@@ -197,6 +197,8 @@
     const API_PREFIXES = [basePrefix, BASE, ''];
     let paypalSdkLoaded = false;
     let paypalButtonsRenderedForFineId = null;
+    let paypalConfig = null;
+    let currentFineAmount = 0;
 
     function showAlert(message, type) {
       const alert = document.getElementById('pageAlert');
@@ -218,12 +220,13 @@
     }
 
     function fillFineDetails(fine) {
+      currentFineAmount = Number(fine.fine_amount || 0);
       document.getElementById('fineId').value = fine.id || '';
       document.getElementById('fineDisplayId').value = fine.id || '-';
       document.getElementById('fineUser').value = fine.user_name || 'Unknown User';
       document.getElementById('fineBook').value = fine.book_name || 'Unknown Book';
       document.getElementById('fineDays').value = Number(fine.days_overdue || 0);
-      document.getElementById('fineAmount').value = '₹ ' + Number(fine.fine_amount || 0).toFixed(2);
+      document.getElementById('fineAmount').value = '₹ ' + currentFineAmount.toFixed(2);
       document.getElementById('fineStatus').value = fine.status || 'Pending';
     }
 
@@ -287,6 +290,7 @@
       if (!cfgRes.ok) {
         throw new Error(cfg.error || 'PayPal is not configured');
       }
+      paypalConfig = cfg;
 
       await new Promise((resolve, reject) => {
         const script = document.createElement('script');
@@ -310,42 +314,87 @@
       const container = document.getElementById('paypalButtonContainer');
       container.innerHTML = '';
 
-      window.paypal.Buttons({
-        style: {
-          shape: 'rect',
-          layout: 'vertical'
-        },
-        createOrder: async () => {
-          clearAlert();
-          const { res, data } = await apiPostJson('/api/fines/' + fineId + '/paypal/create-order', {});
-          if (!res.ok || !data.order_id) {
-            throw new Error(data.error || 'Failed to initialize PayPal order');
-          }
-          return data.order_id;
-        },
-        onApprove: async (data) => {
-          const paymentNotes = document.getElementById('paymentNotes').value.trim();
-          const { res, data: result } = await apiPostJson('/api/fines/' + fineId + '/collect', {
-            payment_type: 'Online',
-            payment_notes: paymentNotes,
-            paypal_order_id: data.orderID
-          });
-          if (!res.ok) {
-            showAlert(result.error || 'PayPal payment failed', 'error');
-            return;
+      const onApproveHandler = async (data, actions) => {
+        const paymentNotes = document.getElementById('paymentNotes').value.trim();
+        const payload = {
+          payment_type: 'Online',
+          payment_notes: paymentNotes,
+          paypal_order_id: data.orderID
+        };
+
+        if (!(paypalConfig && paypalConfig.server_capture_enabled)) {
+          const captureResult = await actions.order.capture();
+          const purchaseUnit = captureResult && captureResult.purchase_units ? captureResult.purchase_units[0] : null;
+          const captureInfo = purchaseUnit && purchaseUnit.payments && purchaseUnit.payments.captures ? purchaseUnit.payments.captures[0] : null;
+          const captureId = captureInfo && captureInfo.id ? String(captureInfo.id).trim() : '';
+          if (!captureId) {
+            throw new Error('PayPal capture id not found');
           }
 
-          showAlert('Online payment successful. Redirecting to Fines list...', 'success');
-          setTimeout(() => {
-            window.location.href = BASE + '/index.html#fines';
-          }, 900);
-        },
-        onError: (err) => {
-          const message = err && err.message ? err.message : 'Unable to process PayPal payment';
-          showAlert(message, 'error');
+          payload.paypal_capture_id = captureId;
+          payload.paypal_payer_email = String(captureResult?.payer?.email_address || '').trim();
+          payload.paypal_payer_id = String(captureResult?.payer?.payer_id || '').trim();
+          payload.paypal_captured_on_client = true;
         }
-      }).render('#paypalButtonContainer');
 
+        const { res, data: result } = await apiPostJson('/api/fines/' + fineId + '/collect', payload);
+        if (!res.ok) {
+          showAlert(result.error || 'PayPal payment failed', 'error');
+          return;
+        }
+
+        showAlert('Online payment successful. Redirecting to Fines list...', 'success');
+        setTimeout(() => {
+          window.location.href = BASE + '/index.html#fines';
+        }, 900);
+      };
+
+      const onErrorHandler = (err) => {
+        const message = err && err.message ? err.message : 'Unable to process PayPal payment';
+        showAlert(message, 'error');
+      };
+
+      const paypalButtons = (paypalConfig && paypalConfig.server_capture_enabled)
+        ? window.paypal.Buttons({
+            style: {
+              shape: 'rect',
+              layout: 'vertical'
+            },
+            createOrder: async () => {
+              clearAlert();
+              const { res, data } = await apiPostJson('/api/fines/' + fineId + '/paypal/create-order', {});
+              if (!res.ok || !data.order_id) {
+                throw new Error(data.error || 'Failed to initialize PayPal order');
+              }
+              return data.order_id;
+            },
+            onApprove: onApproveHandler,
+            onError: onErrorHandler
+          })
+        : window.paypal.Buttons({
+            style: {
+              shape: 'rect',
+              layout: 'vertical'
+            },
+            createOrder: (data, actions) => actions.order.create({
+              intent: 'CAPTURE',
+              purchase_units: [{
+                amount: {
+                  currency_code: (paypalConfig && paypalConfig.currency) || 'USD',
+                  value: Number(currentFineAmount || 0).toFixed(2)
+                },
+                description: 'Library fine payment #' + fineId
+              }],
+              application_context: {
+                shipping_preference: 'NO_SHIPPING',
+                user_action: 'PAY_NOW'
+              }
+            }),
+            onApprove: onApproveHandler,
+            onError: onErrorHandler
+          });
+
+      paypalButtons.render('#paypalButtonContainer');
       paypalButtonsRenderedForFineId = fineId;
     }
 

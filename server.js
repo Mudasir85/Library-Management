@@ -1724,17 +1724,26 @@ app.get('/api/fines/:id', (req, res) => {
 
 app.get('/api/paypal/client-id', (req, res) => {
   const creds = getPayPalCredentials();
-  if (!creds.clientId || !creds.clientSecret) {
-    return res.status(400).json({ error: 'PayPal is not configured on server' });
+  if (!creds.clientId) {
+    return res.status(400).json({ error: 'PayPal is not configured on server. Missing PAYPAL_CLIENT_ID.' });
   }
   return res.json({
     client_id: creds.clientId,
-    currency: getPayPalCurrencyCode()
+    currency: getPayPalCurrencyCode(),
+    server_capture_enabled: Boolean(creds.clientSecret)
   });
 });
 
 app.post('/api/fines/:id/paypal/create-order', (req, res) => {
   const { id } = req.params;
+  const creds = getPayPalCredentials();
+
+  if (!creds.clientId) {
+    return res.status(400).json({ error: 'PayPal is not configured on server. Missing PAYPAL_CLIENT_ID.' });
+  }
+  if (!creds.clientSecret) {
+    return res.status(400).json({ error: 'Server-side PayPal capture is disabled. Configure PAYPAL_CLIENT_SECRET or use client-side capture.' });
+  }
 
   db.get(
     `SELECT id, fine_amount, status
@@ -1797,27 +1806,18 @@ app.post('/api/fines/:id/collect', (req, res) => {
 
       if (paymentType === 'Online') {
         const orderId = String(req.body?.paypal_order_id || '').trim();
+        const paypalClientCaptured = Boolean(req.body?.paypal_captured_on_client);
+        const creds = getPayPalCredentials();
+
         if (!orderId) {
           return res.status(400).json({ error: 'PayPal order id is required for online payment' });
         }
 
-        return capturePayPalOrder(orderId, (captureErr, captureData) => {
-          if (captureErr) {
-            return res.status(400).json({ error: captureErr.message || 'PayPal capture failed' });
-          }
-
-          const purchaseUnit = captureData?.purchase_units?.[0] || null;
-          const captureInfo = purchaseUnit?.payments?.captures?.[0] || null;
-          if (!captureInfo || String(captureInfo.status || '').toUpperCase() !== 'COMPLETED') {
-            return res.status(400).json({ error: 'PayPal payment is not completed' });
-          }
-
-          transactionId = String(captureInfo.id || '').trim() || null;
+        const savePayPalCollection = (captureId, payerEmail, payerId) => {
+          transactionId = captureId || generatePaymentReference('TXN');
           paymentGateway = 'PayPal';
-          paymentReference = orderId;
+          paymentReference = captureId || orderId;
 
-          const payerEmail = String(captureData?.payer?.email_address || '').trim();
-          const payerId = String(captureData?.payer?.payer_id || '').trim();
           const paypalNote = [
             paymentNotes,
             payerEmail ? `PayPal Payer: ${payerEmail}` : '',
@@ -1873,7 +1873,35 @@ app.post('/api/fines/:id/collect', (req, res) => {
               }
             );
           });
-        });
+        };
+
+        if (creds.clientSecret && !paypalClientCaptured) {
+          return capturePayPalOrder(orderId, (captureErr, captureData) => {
+            if (captureErr) {
+              return res.status(400).json({ error: captureErr.message || 'PayPal capture failed' });
+            }
+
+            const purchaseUnit = captureData?.purchase_units?.[0] || null;
+            const captureInfo = purchaseUnit?.payments?.captures?.[0] || null;
+            if (!captureInfo || String(captureInfo.status || '').toUpperCase() !== 'COMPLETED') {
+              return res.status(400).json({ error: 'PayPal payment is not completed' });
+            }
+
+            const captureId = String(captureInfo.id || '').trim() || null;
+            const payerEmail = String(captureData?.payer?.email_address || '').trim();
+            const payerId = String(captureData?.payer?.payer_id || '').trim();
+            return savePayPalCollection(captureId, payerEmail, payerId);
+          });
+        }
+
+        const captureId = String(req.body?.paypal_capture_id || '').trim();
+        const payerEmail = String(req.body?.paypal_payer_email || '').trim();
+        const payerId = String(req.body?.paypal_payer_id || '').trim();
+
+        if (!captureId) {
+          return res.status(400).json({ error: 'PayPal capture id is required for online payment' });
+        }
+        return savePayPalCollection(captureId, payerEmail, payerId);
       } else {
         paymentGateway = 'Office Counter';
         paymentReference = req.body?.payment_reference
