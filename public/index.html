@@ -380,15 +380,15 @@
     }
 
     .popup-success {
-      background: #e8f7ed;
+      background: #dcfce7;
       color: #166534;
-      border-color: #bbf7d0;
+      border-color: #22c55e;
     }
 
     .popup-error {
-      background: #fef2f2;
-      color: #991b1b;
-      border-color: #fecaca;
+      background: #fee2e2;
+      color: #b91c1c;
+      border-color: #ef4444;
     }
 
     .popup-confirm-overlay {
@@ -1398,9 +1398,14 @@
     if (!stack) return;
 
     const popup = document.createElement('div');
-    const popupType = type === 'success' ? 'popup-success' : 'popup-error';
+    const isSuccess = type === 'success';
+    const popupType = isSuccess ? 'popup-success' : 'popup-error';
+    const normalizedMessage = String(message || '').trim();
+    const popupText = isSuccess
+      ? normalizedMessage
+      : (/^error:\s*/i.test(normalizedMessage) ? normalizedMessage : 'Error: ' + normalizedMessage);
     popup.className = 'popup-message ' + popupType;
-    popup.textContent = message;
+    popup.textContent = popupText;
 
     stack.appendChild(popup);
     requestAnimationFrame(() => popup.classList.add('show'));
